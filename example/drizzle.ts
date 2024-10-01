@@ -2,18 +2,34 @@ import { Elysia, t } from 'elysia';
 import { swagger } from '@elysiajs/swagger';
 import { Lucia } from '../src/index';
 import { drizzleAdapter } from '@lucia-auth/adapter-drizzle'; // Import Drizzle adapter
-import { drizzle } from 'drizzle-orm'; // Import Drizzle ORM
-import { connect } from 'drizzle-orm/sqlite'; // Use the SQLite connector or adjust as necessary
+import { drizzle } from 'drizzle-orm/better-sqlite3'; // Use better-sqlite3 for Drizzle ORM
+import sqlite from 'better-sqlite3'; // SQLite3 library
+import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+
+// Initialize SQLite database in memory
+const sqliteDB = sqlite(':memory:');
+const db = drizzle(sqliteDB);
+
+// Define user and session tables using Drizzle ORM
+const userTable = sqliteTable('user', {
+    id: text('id').primaryKey(),
+    username: text('username').notNull(),
+    password: text('password').notNull(), // Add fields as needed
+});
+
+const sessionTable = sqliteTable('session', {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+        .notNull()
+        .references(() => userTable.id),
+    expiresAt: integer('expires_at').notNull(),
+});
 
 const { GH_CLIENT_ID, GH_CLIENT_SECRET } = process.env;
 
 if (!GH_CLIENT_ID || !GH_CLIENT_SECRET) throw new Error('GitHub OAuth token is needed');
 
-// Set up Drizzle connection (adjust based on your database)
-const db = drizzle(connect({
-    // Your database connection configuration here
-}));
-
+// Initialize Lucia with the Drizzle adapter
 const {
     elysia: auth,
     lucia,
@@ -26,23 +42,24 @@ const {
     'user'
 >({
     name: 'user',
-    adapter: drizzleAdapter(db) // Use Drizzle adapter
+    adapter: drizzleAdapter(db, sessionTable, userTable), // Use Drizzle adapter
 });
 
+// Set up authentication controller
 const authController = new Elysia({ prefix: '/auth' })
     .use(auth)
     .use(
         oauth.github({
             clientId: GH_CLIENT_ID,
-            clientSecret: GH_CLIENT_SECRET
+            clientSecret: GH_CLIENT_SECRET,
         })
     )
     .guard(
         {
             body: t.Object({
                 username: t.String(),
-                password: t.String()
-            })
+                password: t.String(),
+            }),
         },
         (app) =>
             app
@@ -54,7 +71,7 @@ const authController = new Elysia({ prefix: '/auth' })
     )
     .guard(
         {
-            isSignIn: true
+            isSignIn: true,
         },
         (app) =>
             app
@@ -69,6 +86,7 @@ const authController = new Elysia({ prefix: '/auth' })
                 })
     );
 
+// Set up the main Elysia application
 const app = new Elysia()
     .use(authController)
     // Uncomment and modify the onBeforeHandle if needed
